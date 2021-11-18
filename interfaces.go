@@ -2,7 +2,7 @@ package commands
 
 import "context"
 
-// Proc represents a generic function call for operations.
+// Fn represents a generic function call for operations.
 type Fn func(ctx context.Context, op Operation) (interface{}, error)
 
 // Command is an interface that represents a generic command.
