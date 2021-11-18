@@ -1,82 +1,100 @@
-package projects
+package commands
 
 import (
 	"errors"
 	"sync"
+
+	"github.com/rasteric/commands/api"
 )
 
 var ErrOutOfMemory = errors.New("command storage limit exceeded; try to increase the undo/redo limit")
 var ErrToManyConfig = errors.New("only one optional configuration argument can be passed to NewCmdMgr")
-var ErrAttemptReuseNumeric = errors.New("attempt to register a command numeric already in use")
+var ErrAttemptReuseNumeric = errors.New("attempt to register a numeric command ID already in use")
 
-// Proc represents a generic function call for operations.
-type Fn func(op Op, args []interface{}) (interface{}, error)
-
-// FinalProc represents a generic final callback when a command operation has finished.
-type FinalFn func(op Op) (interface{}, error)
-
-// UndoProc represents a generic callback for undoing the effects of the operation.
-type UndoFn Fn
-
-// UndoFinal represents a generic undo final callback when undoing has finished.
-type UndoFinalFn FinalFn
-
-// CmdID is the numeric type of a command.
-type CmdID int
-
-// Cmd represents a type of command (without specific application data).
+// Command represents a type of command (without specific application data).
 type Cmd struct {
-	Sort         CmdID  // the numeric sort of the command (unique)
-	Name         string // name of the command suitable for menus, not unique
-	Info         string // short explanation of the command, not unique
-	MenuShortcut string // the menu shortcut, if there is any, "" otherwise (unique)
+	sort         int    // the numeric sort of the command (unique)
+	name         string // name of the command suitable for menus, not unique
+	info         string // short explanation of the command, not unique
+	menuShortcut string // the menu shortcut, if there is any, "" otherwise (unique)
 }
 
-// Command is an interface representing a generic command.
-type Command interface {
-	ID() CmdID
-	Name() string
-	Info() string
-	MenuShortcut() string
+// NewCmd returns a new command.
+func NewCmd(sort int, name, info, shortcut string) *Cmd {
+	return &Cmd{sort: sort, info: info, name: name, menuShortcut: shortcut}
 }
 
-// OpID is a runtime-unique, monotonically increasing ID of a particular Cmd instance.
-type OpID int
+// Name returns the name of a command.
+func (c *Cmd) Name() string { return c.name }
+
+// ID returns the numeric sort of a command.
+func (c *Cmd) ID() int { return c.sort }
+
+// Info returns a short info string for the command.
+func (c *Cmd) Info() string { return c.info }
+
+// Shortcut returns the menu shortcut of the command.
+func (c *Cmd) Shortcut() string { return c.menuShortcut }
 
 // Op holds operations that can be executed asynchronously. They can only be executed
 // by an OpManager.
 type Op struct {
-	ID        OpID          // ID of this instance (unique at runtime)
-	Sort      Command       // the type and general properties of the command
-	Args      []interface{} // the arguments that this operation takes
-	Proc      Fn            // the actual operation function
-	Final     FinalFn       // the final result in case the operation is async
-	Undo      UndoFn        // the function to undo the operation
-	UndoFinal UndoFinalFn   // the function called when undoing has finished
+	id        int           // ID of this instance (unique at runtime)
+	sort      Command       // the type and general properties of the command
+	args      []interface{} // the arguments that this operation takes
+	proc      Fn            // the actual operation function
+	final     FinalFn       // the final result in case the operation is async
+	undo      UndoFn        // the function to undo the operation
+	undoArgs  []interface{} // the arguments for the undo function
+	undoFinal UndoFinalFn   // the function called when undoing has finished
 }
 
-// Operation is an interface representing a synchroous or asynchronous command application.
-// It contains the data needed for executing the command.
-type Operation interface {
-	ID() OpID
-	Sort() Command
-	Args() []interface{}
-	Proc() Fn
-	Final() FinalFn
-	Undo() UndoFn
-	UndoFinal() UndoFinalFn
+// NewOp creates a new Op with given ID and data.
+func NewOp(id int, sort Command, args []interface{}, proc Fn, final FinalFn, undo UndoFn,
+	undoArgs []interface{}, undoFinal UndoFinalFn) *Op {
+	return &Op{
+		id:        id,
+		sort:      sort,
+		args:      args,
+		proc:      proc,
+		final:     final,
+		undo:      undo,
+		undoArgs:  undoArgs,
+		undoFinal: undoFinal,
+	}
 }
+
+// ID returns the ID of that operation, which is runtime-unique.
+func (o *Op) ID() int { return o.id }
+
+// Sort returns the command sort of the operation.
+func (o *Op) Sort() api.Command { return o.sort }
+
+// Args returns the arguments of the operation.
+func (o *Op) Args() []interface{} { return o.args }
+
+// Proc returns the procedure that executes the operation.
+func (o *Op) Proc() Fn { return o.proc }
+
+// Final returns the procedure that is called once command execution is finished.
+func (o *Op) Final() FinalFn { return o.final }
+
+// Undo returns the procedure that is called to undo the effects of the operation.
+func (o *Op) Undo() UndoFn { return o.undo }
+
+// UndoFinal returns the procedure that is called when the operation has been undone.
+func (o *Op) UndoFinal() UndoFinalFn { return o.undoFinal }
 
 // OpManager manages commands and provides undo/redo functionality.
 type OpManager struct {
-	InProgress []OpID // holds commands in progress
-	Done       []OpID // holds commands that have been done
-	Redoable   []OpID // holds commands that have been undone and can be redone
+	InProgress []int // holds operations in progress
+	Done       []int // holds operations that have been done
+	Redoable   []int // holds operations that have been undone and can be redone
 	// unexported private fields
 	mutex      sync.Mutex
-	cmdIDCount CmdID
-	opIDCount  OpID
-	opStorage  map[OpID]Operation
+	cmdIDCount int
+	opIDCount  int
+	opStorage  map[int]Operation
 	config     Config
 }
 
@@ -98,22 +116,22 @@ func NewOpManager(config ...Config) (*OpManager, error) {
 		return nil, ErrToManyConfig
 	}
 	var cfg Config
-	if len(config) == 0 {
+	if len(config) > 0 {
 		cfg = config[0]
 	} else {
 		cfg = Defaults
 	}
 	return &OpManager{
-		InProgress: make([]OpID, 0),
-		Done:       make([]OpID, 0),
-		Redoable:   make([]OpID, 0),
-		opStorage:  make(map[OpID]Operation),
+		InProgress: make([]int, 0),
+		Done:       make([]int, 0),
+		Redoable:   make([]int, 0),
+		opStorage:  make(map[int]api.Operation),
 		config:     cfg,
 	}, nil
 }
 
 // NewCmdID returns a new, unused numeric command sort.
-func (mgr *OpManager) NewCmdID() CmdID {
+func (mgr *OpManager) NewCmdID() int {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 	mgr.cmdIDCount++
@@ -123,10 +141,10 @@ func (mgr *OpManager) NewCmdID() CmdID {
 // RegisterCmdIDs registers a number of numeric command types for use. An error is returned
 // if any of them has been used already. NewNumeric() will return higher command Numerics
 // than the highest registered one afterwards.
-func (mgr *OpManager) RegisterNumerics(cmdIDs ...CmdID) error {
+func (mgr *OpManager) RegisterCmdIDs(cmdIDs ...int) error {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
-	var m CmdID
+	var m int
 	for _, n := range cmdIDs {
 		if n <= mgr.cmdIDCount {
 			return ErrAttemptReuseNumeric
@@ -140,7 +158,7 @@ func (mgr *OpManager) RegisterNumerics(cmdIDs ...CmdID) error {
 }
 
 // NewOpID returns a new, unused Op ID.
-func (mgr *OpManager) NewOpID() OpID {
+func (mgr *OpManager) NewOpID() int {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
 	mgr.opIDCount++
