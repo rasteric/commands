@@ -1,4 +1,4 @@
-package api
+package commands
 
 // Proc represents a generic function call for operations.
 type Fn func(op Operation, args []interface{}) (interface{}, error)

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/rasteric/commands/api"
+	"github.com/rasteric/commands/cmd"
 )
 
 var ErrOutOfMemory = errors.New("command storage limit exceeded; try to increase the undo/redo limit")
@@ -39,19 +39,19 @@ func (c *Cmd) Shortcut() string { return c.menuShortcut }
 // Op holds operations that can be executed asynchronously. They can only be executed
 // by an OpManager.
 type Op struct {
-	id        int           // ID of this instance (unique at runtime)
-	sort      Command       // the type and general properties of the command
-	args      []interface{} // the arguments that this operation takes
-	proc      Fn            // the actual operation function
-	final     FinalFn       // the final result in case the operation is async
-	undo      UndoFn        // the function to undo the operation
-	undoArgs  []interface{} // the arguments for the undo function
-	undoFinal UndoFinalFn   // the function called when undoing has finished
+	id        int             // ID of this instance (unique at runtime)
+	sort      cmd.Command     // the type and general properties of the command
+	args      []interface{}   // the arguments that this operation takes
+	proc      cmd.Fn          // the actual operation function
+	final     cmd.FinalFn     // the final result in case the operation is async
+	undo      cmd.UndoFn      // the function to undo the operation
+	undoArgs  []interface{}   // the arguments for the undo function
+	undoFinal cmd.UndoFinalFn // the function called when undoing has finished
 }
 
 // NewOp creates a new Op with given ID and data.
-func NewOp(id int, sort Command, args []interface{}, proc Fn, final FinalFn, undo UndoFn,
-	undoArgs []interface{}, undoFinal UndoFinalFn) *Op {
+func NewOp(id int, sort cmd.Command, args []interface{}, proc cmd.Fn, final cmd.FinalFn, undo cmd.UndoFn,
+	undoArgs []interface{}, undoFinal cmd.UndoFinalFn) *Op {
 	return &Op{
 		id:        id,
 		sort:      sort,
@@ -68,22 +68,22 @@ func NewOp(id int, sort Command, args []interface{}, proc Fn, final FinalFn, und
 func (o *Op) ID() int { return o.id }
 
 // Sort returns the command sort of the operation.
-func (o *Op) Sort() api.Command { return o.sort }
+func (o *Op) Sort() cmd.Command { return o.sort }
 
 // Args returns the arguments of the operation.
 func (o *Op) Args() []interface{} { return o.args }
 
 // Proc returns the procedure that executes the operation.
-func (o *Op) Proc() Fn { return o.proc }
+func (o *Op) Proc() cmd.Fn { return o.proc }
 
 // Final returns the procedure that is called once command execution is finished.
-func (o *Op) Final() FinalFn { return o.final }
+func (o *Op) Final() cmd.FinalFn { return o.final }
 
 // Undo returns the procedure that is called to undo the effects of the operation.
-func (o *Op) Undo() UndoFn { return o.undo }
+func (o *Op) Undo() cmd.UndoFn { return o.undo }
 
 // UndoFinal returns the procedure that is called when the operation has been undone.
-func (o *Op) UndoFinal() UndoFinalFn { return o.undoFinal }
+func (o *Op) UndoFinal() cmd.UndoFinalFn { return o.undoFinal }
 
 // OpManager manages commands and provides undo/redo functionality.
 type OpManager struct {
@@ -125,7 +125,7 @@ func NewOpManager(config ...Config) (*OpManager, error) {
 		InProgress: make([]int, 0),
 		Done:       make([]int, 0),
 		Redoable:   make([]int, 0),
-		opStorage:  make(map[int]api.Operation),
+		opStorage:  make(map[int]cmd.Operation),
 		config:     cfg,
 	}, nil
 }
