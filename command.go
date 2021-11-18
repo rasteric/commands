@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"sync"
+
+	orderedmap "github.com/wk8/go-ordered-map"
 )
 
 var ErrOutOfMemory = errors.New("command storage limit exceeded; try to increase the undo/redo limit")
@@ -16,6 +19,8 @@ type Cmd struct {
 	info         string // short explanation of the command, not unique
 	menuShortcut string // the menu shortcut, if there is any, "" otherwise (unique)
 }
+
+var _ Command = (*Cmd)(nil) // ensure interface compliance
 
 // NewCmd returns a new command.
 func NewCmd(sort int, name, info, shortcut string) *Cmd {
@@ -45,6 +50,8 @@ type Op struct {
 	undoArgs  []interface{} // the arguments for the undo function
 	undoFinal Fn            // the function called when undoing has finished
 }
+
+var _ Operation = (*Op)(nil) // ensure interface compliance
 
 // NewOp creates a new Op with given ID and data.
 func NewOp(id int, sort Command, args []interface{}, proc Fn, final Fn, undo Fn,
@@ -79,19 +86,21 @@ func (o *Op) Final() Fn { return o.final }
 // Undo returns the procedure that is called to undo the effects of the operation.
 func (o *Op) Undo() Fn { return o.undo }
 
+// UndoArgs returns the arguments for the undo procedure.
+func (o *Op) UndoArgs() []interface{} { return o.undoArgs }
+
 // UndoFinal returns the procedure that is called when the operation has been undone.
 func (o *Op) UndoFinal() Fn { return o.undoFinal }
 
 // OpManager manages commands and provides undo/redo functionality.
 type OpManager struct {
-	InProgress []int // holds operations in progress
-	Done       []int // holds operations that have been done
-	Redoable   []int // holds operations that have been undone and can be redone
+	InProgress *orderedmap.OrderedMap // holds operations in progress
+	Done       *orderedmap.OrderedMap // holds operations that have been done
+	Redoable   *orderedmap.OrderedMap // holds operations that have been undone and can be redone
 	// unexported private fields
 	mutex      sync.Mutex
 	cmdIDCount int
 	opIDCount  int
-	opStorage  map[int]Operation
 	config     Config
 }
 
@@ -119,10 +128,9 @@ func NewOpManager(config ...Config) (*OpManager, error) {
 		cfg = Defaults
 	}
 	return &OpManager{
-		InProgress: make([]int, 0),
-		Done:       make([]int, 0),
-		Redoable:   make([]int, 0),
-		opStorage:  make(map[int]Operation),
+		InProgress: orderedmap.New(),
+		Done:       orderedmap.New(),
+		Redoable:   orderedmap.New(),
 		config:     cfg,
 	}, nil
 }
@@ -166,13 +174,13 @@ func (mgr *OpManager) NewOpID() int {
 // executes asynchonously, then the result of the command is only obtained once FinalProc
 // is called, otherwise the result is returned immediately.  Once a command has finished,
 // it is put on the Done chain. While it is in progress, it is on the InProgress chain.
-func (mgr *OpManager) Execute(op Operation) error {
+func (mgr *OpManager) Execute(ctx context.Context, op Operation) error {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
-	if mgr.config.StorageLimit > 0 && len(mgr.opStorage) > mgr.config.StorageLimit {
+	if mgr.config.StorageLimit > 0 && mgr.InProgress.Len() > mgr.config.StorageLimit {
 		return ErrOutOfMemory
 	}
-	mgr.opStorage[op.ID()] = op
-	mgr.InProgress = append(mgr.InProgress, op.ID())
+	mgr.InProgress.Set(op.ID(), op)
+	op.Proc()(ctx, op)
 	return nil
 }

@@ -7,10 +7,10 @@ type Fn func(ctx context.Context, op Operation) (interface{}, error)
 
 // Command is an interface that represents a generic command.
 type Command interface {
-	ID() int              // the numeric command sort
-	Name() string         // the name of the command
-	Info() string         // an info describing the command
-	MenuShortcut() string // the associated menu shortcut
+	ID() int          // the numeric command sort
+	Name() string     // the name of the command
+	Info() string     // an info describing the command
+	Shortcut() string // the associated menu shortcut
 }
 
 // Operation is an interface representing a synchronous or asynchronous command application.
