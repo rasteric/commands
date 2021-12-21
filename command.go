@@ -4,104 +4,18 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	orderedmap "github.com/wk8/go-ordered-map"
 )
 
 var ErrOutOfMemory = errors.New("command storage limit exceeded; try to increase the undo/redo limit")
 var ErrToManyConfig = errors.New("only one optional configuration argument can be passed to NewCmdMgr")
-var ErrAttemptReuseNumeric = errors.New("attempt to register a numeric command ID already in use")
-
-// Command represents a type of command (without specific application data).
-type Cmd struct {
-	sort         int    // the numeric sort of the command (unique)
-	name         string // name of the command suitable for menus, not unique
-	info         string // short explanation of the command, not unique
-	menuShortcut string // the menu shortcut, if there is any, "" otherwise (unique)
-}
-
-var _ Command = (*Cmd)(nil) // ensure interface compliance
-
-// NewCmd returns a new command.
-func NewCmd(sort int, name, info, shortcut string) *Cmd {
-	return &Cmd{sort: sort, info: info, name: name, menuShortcut: shortcut}
-}
-
-// Name returns the name of a command.
-func (c *Cmd) Name() string { return c.name }
-
-// ID returns the numeric sort of a command.
-func (c *Cmd) ID() int { return c.sort }
-
-// Info returns a short info string for the command.
-func (c *Cmd) Info() string { return c.info }
-
-// Shortcut returns the menu shortcut of the command.
-func (c *Cmd) Shortcut() string { return c.menuShortcut }
-
-// Op holds operations that can be executed asynchronously.
-type Op struct {
-	id        int           // ID of this instance (unique at runtime)
-	sort      Command       // the type and general properties of the command
-	args      []interface{} // the arguments that this operation takes
-	proc      Fn            // the actual operation function
-	final     Fn            // the final result in case the operation is async
-	undo      Fn            // the function to undo the operation
-	undoArgs  []interface{} // the arguments for the undo function
-	undoFinal Fn            // the function called when undoing has finished
-}
-
-var _ Operation = (*Op)(nil) // ensure interface compliance
-
-// NewOp creates a new Op with given ID and data.
-func NewOp(id int, sort Command, args []interface{}, proc Fn, final Fn, undo Fn,
-	undoArgs []interface{}, undoFinal Fn) *Op {
-	return &Op{
-		id:        id,
-		sort:      sort,
-		args:      args,
-		proc:      proc,
-		final:     final,
-		undo:      undo,
-		undoArgs:  undoArgs,
-		undoFinal: undoFinal,
-	}
-}
-
-// ID returns the ID of that operation, which is runtime-unique.
-func (o *Op) ID() int { return o.id }
-
-// Sort returns the command sort of the operation.
-func (o *Op) Sort() Command { return o.sort }
-
-// Args returns the arguments of the operation.
-func (o *Op) Args() []interface{} { return o.args }
-
-// Proc returns the procedure that executes the operation.
-func (o *Op) Proc() Fn { return o.proc }
-
-// Final returns the procedure that is called once command execution is finished.
-func (o *Op) Final() Fn { return o.final }
-
-// Undo returns the procedure that is called to undo the effects of the operation.
-func (o *Op) Undo() Fn { return o.undo }
-
-// UndoArgs returns the arguments for the undo procedure.
-func (o *Op) UndoArgs() []interface{} { return o.undoArgs }
-
-// UndoFinal returns the procedure that is called when the operation has been undone.
-func (o *Op) UndoFinal() Fn { return o.undoFinal }
 
 // OpManager manages commands and provides undo/redo functionality.
 type OpManager struct {
-	InProgress *orderedmap.OrderedMap // holds operations in progress
-	Done       *orderedmap.OrderedMap // holds operations that have been done
-	Redoable   *orderedmap.OrderedMap // holds operations that have been undone and can be redone
+	Undoable []Operation // holds operations that have been done
+	Redoable []Operation // holds operations that have been undone and can be redone
 	// unexported private fields
-	mutex      sync.Mutex
-	cmdIDCount int
-	opIDCount  int
-	config     Config
+	mutex  sync.Mutex
+	config Config
 }
 
 // UnlimitedStorage is an option for NewCmdMgr that allows for unlimited storage.
@@ -128,59 +42,97 @@ func NewOpManager(config ...Config) (*OpManager, error) {
 		cfg = Defaults
 	}
 	return &OpManager{
-		InProgress: orderedmap.New(),
-		Done:       orderedmap.New(),
-		Redoable:   orderedmap.New(),
-		config:     cfg,
+		Undoable: make([]Operation, 0),
+		Redoable: make([]Operation, 0),
+		config:   cfg,
 	}, nil
 }
 
-// NewCmdID returns a new, unused numeric command sort.
-func (mgr *OpManager) NewCmdID() int {
+func (mgr *OpManager) hasBeenDone(op Operation) {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
-	mgr.cmdIDCount++
-	return mgr.cmdIDCount
+	mgr.Undoable = append(mgr.Undoable, op)
 }
 
-// RegisterCmdIDs registers a number of numeric command types for use. An error is returned
-// if any of them has been used already. NewNumeric() will return higher command Numerics
-// than the highest registered one afterwards.
-func (mgr *OpManager) RegisterCmdIDs(cmdIDs ...int) error {
+func (mgr *OpManager) hasBeenUndone(op Operation) {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
-	var m int
-	for _, n := range cmdIDs {
-		if n <= mgr.cmdIDCount {
-			return ErrAttemptReuseNumeric
-		}
-		if n > m {
-			m = n
+	for i, o := range mgr.Undoable {
+		if o == op {
+			mgr.Undoable = append(mgr.Undoable[:i], mgr.Undoable[i+1:]...)
+			break
 		}
 	}
-	mgr.cmdIDCount = m + 1
-	return nil
+	mgr.Redoable = append(mgr.Redoable, op)
 }
 
-// NewOpID returns a new, unused Op ID.
-func (mgr *OpManager) NewOpID() int {
+func (mgr *OpManager) hasBeenRedone(op Operation) {
 	mgr.mutex.Lock()
 	defer mgr.mutex.Unlock()
-	mgr.opIDCount++
-	return mgr.opIDCount
-}
-
-// Execute executes a command and returns any immediate error. If the command
-// executes asynchonously, then the result of the command is only obtained once FinalProc
-// is called, otherwise the result is returned immediately.  Once a command has finished,
-// it is put on the Done chain. While it is in progress, it is on the InProgress chain.
-func (mgr *OpManager) Execute(ctx context.Context, op Operation) error {
-	mgr.mutex.Lock()
-	defer mgr.mutex.Unlock()
-	if mgr.config.StorageLimit > 0 && mgr.InProgress.Len() > mgr.config.StorageLimit {
-		return ErrOutOfMemory
+	for i, o := range mgr.Redoable {
+		if o == op {
+			mgr.Redoable = append(mgr.Redoable[:i], mgr.Redoable[i+1:]...)
+			break
+		}
 	}
-	mgr.InProgress.Set(op.ID(), op)
-	op.Proc()(ctx, op)
-	return nil
+	mgr.Undoable = append(mgr.Undoable, op)
+}
+
+// Execute executes operation with the given arguments, taking care of the undo and redo history.
+func (mgr *OpManager) Execute(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+		result, err := op.Execute(ctx)
+		if err == nil {
+			mgr.hasBeenDone(op)
+		}
+		final(result, err)
+	}(ctx, op, final)
+}
+
+// Undo undos the operation. Any undo data must be stored in the operation itself.
+func (mgr *OpManager) Undo(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+		result, err := op.Undo(ctx)
+		if err == nil {
+			mgr.hasBeenUndone(op)
+		}
+		final(result, err)
+	}(ctx, op, final)
+}
+
+// Redo redos the operation.
+func (mgr *OpManager) Redo(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+		result, err := op.Redo(ctx)
+		if err == nil {
+			mgr.hasBeenRedone(op)
+		}
+		final(result, err)
+	}(ctx, op, final)
+}
+
+// CanUndo returns true if an operation can be undone.
+func (mgr *OpManager) CanUndo() bool {
+	return len(mgr.Undoable) > 0
+}
+
+// CanRedo returns true if an operation can be redone.
+func (mgr *OpManager) CanRedo() bool {
+	return len(mgr.Redoable) > 0
+}
+
+// UndoCmd returns the last command that can be undone, or nil if there is none.
+func (mgr *OpManager) UndoCmd() Command {
+	if len(mgr.Undoable) == 0 {
+		return nil
+	}
+	return mgr.Undoable[len(mgr.Undoable)-1].Cmd()
+}
+
+// RedoCmd returns the last command that can be redone, or nil if there is none.
+func (mgr *OpManager) RedoCmd() Command {
+	if len(mgr.Redoable) == 0 {
+		return nil
+	}
+	return mgr.Redoable[len(mgr.Redoable)-1].Cmd()
 }
