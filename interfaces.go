@@ -12,7 +12,7 @@ type Command interface {
 // Operation is an interface representing asynchronous command application.
 type Operation interface {
 	Cmd() Command
-	Execute(ctx context.Context) (interface{}, error)
-	Undo(ctx context.Context) (interface{}, error)
-	Redo(ctx context.Context) (interface{}, error)
+	Execute(ctx context.Context) (any, error)
+	Undo(ctx context.Context) (any, error)
+	Redo(ctx context.Context) (any, error)
 }

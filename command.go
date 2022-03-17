@@ -112,9 +112,9 @@ func (mgr *OpManager) hasBeenRedone(op Operation) {
 
 // Execute executes an operation asynchronously, taking care of the undo and redo history.
 func (mgr *OpManager) Execute(ctx context.Context, op Operation,
-	final func(result interface{}, err error)) Cancelation {
+	final func(result any, err error)) Cancelation {
 	var cancel Cancelation
-	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result any, err error)) {
 		mgr.wg.Add(1)
 		defer mgr.wg.Done()
 		cancel = mgr.withCancel(ctx)
@@ -129,7 +129,7 @@ func (mgr *OpManager) Execute(ctx context.Context, op Operation,
 }
 
 // ExecuteSync executes an operation synchronously, returning the result or an error.
-func (mgr *OpManager) ExecuteSync(ctx context.Context, op Operation) (interface{}, error) {
+func (mgr *OpManager) ExecuteSync(ctx context.Context, op Operation) (any, error) {
 	result, err := op.Execute(ctx)
 	if err == nil {
 		mgr.hasBeenDone(op)
@@ -139,9 +139,9 @@ func (mgr *OpManager) ExecuteSync(ctx context.Context, op Operation) (interface{
 
 // Undo undos the operation. Any undo data must be stored in the operation itself.
 func (mgr *OpManager) Undo(ctx context.Context, op Operation,
-	final func(result interface{}, err error)) Cancelation {
+	final func(result any, err error)) Cancelation {
 	var cancel Cancelation
-	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result any, err error)) {
 		mgr.wg.Add(1)
 		defer mgr.wg.Done()
 		cancel = mgr.withCancel(ctx)
@@ -157,9 +157,9 @@ func (mgr *OpManager) Undo(ctx context.Context, op Operation,
 
 // Redo redos the operation.
 func (mgr *OpManager) Redo(ctx context.Context, op Operation,
-	final func(result interface{}, err error)) Cancelation {
+	final func(result any, err error)) Cancelation {
 	var cancel Cancelation
-	go func(ctx context.Context, op Operation, final func(result interface{}, err error)) {
+	go func(ctx context.Context, op Operation, final func(result any, err error)) {
 		mgr.wg.Add(1)
 		defer mgr.wg.Done()
 		cancel = mgr.withCancel(ctx)
