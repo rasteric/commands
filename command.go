@@ -7,7 +7,7 @@ import (
 )
 
 var ErrOutOfMemory = errors.New("command storage limit exceeded; try to increase the undo/redo limit")
-var ErrToManyConfig = errors.New("only one optional configuration argument can be passed to NewCmdMgr")
+var ErrTooManyConfig = errors.New("only one optional configuration argument can be passed to NewCmdMgr")
 
 // UnlimitedStorage is an option for NewCmdMgr that allows for unlimited storage.
 const UnlimitedStorage = 0
@@ -55,7 +55,7 @@ type OpManager struct {
 // NewOpManager returns a new, empty operations manager.
 func NewOpManager(config ...Config) (*OpManager, error) {
 	if len(config) > 1 {
-		return nil, ErrToManyConfig
+		return nil, ErrTooManyConfig
 	}
 	var cfg Config
 	if len(config) > 0 {
@@ -110,7 +110,7 @@ func (mgr *OpManager) hasBeenRedone(op Operation) {
 	mgr.undoable = append(mgr.undoable, op)
 }
 
-// Execute executes operation with the given arguments, taking care of the undo and redo history.
+// Execute executes an operation asynchronously, taking care of the undo and redo history.
 func (mgr *OpManager) Execute(ctx context.Context, op Operation,
 	final func(result interface{}, err error)) Cancelation {
 	var cancel Cancelation
@@ -126,6 +126,15 @@ func (mgr *OpManager) Execute(ctx context.Context, op Operation,
 		final(result, err)
 	}(ctx, op, final)
 	return cancel
+}
+
+// ExecuteSync executes an operation synchronously, returning the result or an error.
+func (mgr *OpManager) ExecuteSync(ctx context.Context, op Operation) (interface{}, error) {
+	result, err := op.Execute(ctx)
+	if err == nil {
+		mgr.hasBeenDone(op)
+	}
+	return result, err
 }
 
 // Undo undos the operation. Any undo data must be stored in the operation itself.
